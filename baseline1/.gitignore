@@ -1,0 +1,14 @@
+# 忽略（都不进 git）
+runs/
+weights/
+package/
+data600/
+__pycache__/
+*.pyc
+*.pth
+*.pt
+
+# 系统垃圾
+.DS_Store
+
+# 注意：licenses/ 是合规材料，必须进 git（附录 A 要求随包提供许可证全文）

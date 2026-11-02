@@ -1,0 +1,16 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 大数据/权重目录（绝不进 git）
+# 注意：gitignore 不支持行内注释，注释必须独立成行，
+# 否则 # 后的文字会变成文件名的一部分导致规则失效（踩过坑）
+data600/
+runs/
+weights/
+third_party/
+
+# 系统/编辑器
+.DS_Store
+.ipynb_checkpoints/

@@ -1,0 +1,9 @@
+# 运行时依赖：与复赛容器保持一致（只保证 torch + torchvision）
+torch>=2.0
+torchvision>=0.15
+numpy
+pillow
+tqdm
+
+# 以下仅「打包脚本 make_package.py」需要，推理与训练不依赖：
+# openpyxl

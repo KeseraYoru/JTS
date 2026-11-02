@@ -1,0 +1,12 @@
+# 数据集与归档（绝不进 git）
+cxr_first/
+*.zip
+
+# 系统垃圾
+.DS_Store
+
+# 注意：baseline/ 下的大文件由 baseline/.gitignore 管辖
+# （data600/ runs/ weights/ third_party/ 已被忽略）
+
+# 下载回来的实验产物（提交文件、npz 预测、metrics）
+results/
