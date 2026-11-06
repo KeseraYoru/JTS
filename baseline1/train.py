@@ -21,7 +21,7 @@ import time
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
 from common import (aggregate_by_study, encode_labels, format_auc_report,
@@ -32,7 +32,7 @@ from config import (BATCH_SIZE, EMA_DECAY, EPOCHS, FOCAL_ALPHA, FOCAL_GAMMA,
                     USE_AMP, WARMUP_RATIO)
 from dataset import ChestXrayDataset, make_train_tfms, make_eval_tfms
 from ema import ModelEMA
-from losses import WeightedFocalBCELoss, calculate_pos_weights
+from losses import AsymmetricLoss, WeightedFocalBCELoss, calculate_pos_weights
 from models import (BACKBONE_CHOICES, build_model, build_optimizer, get_model,
                     load_ssl_backbone, set_backbone_trainable)
 
@@ -129,6 +129,26 @@ def main():
     parser.add_argument("--limit", type=int, default=0, help="冒烟测试：只用前 N 条")
     parser.add_argument("--workers", type=int, default=NUM_WORKERS)
     parser.add_argument("--seed", type=int, default=48)
+    parser.add_argument("--pos-cap", type=float, default=POS_WEIGHT_CAP,
+                        help="pos_weight 上限（默认 10）。罕见类是最弱环节，"
+                             "调高到 20 相当于专攻类1/3/4，是最便宜的旋钮")
+    parser.add_argument("--pos-beta", type=float, default=POS_WEIGHT_BETA,
+                        help="effective-number 的 beta（默认 0.9999）")
+    parser.add_argument("--balanced-sampler", type=float, default=0.0,
+                        help="类别平衡采样强度 alpha（0=关闭，推荐 0.5）。"
+                             "用 (N/n_c)^alpha 给含罕见类的图加权后按权重有放回采样。"
+                             "它与 pos_weight 解决的是不同问题：pos_weight 改惩罚力度，"
+                             "采样改出现频次；类1 的病根是样本量，所以采样才是对症的。")
+    parser.add_argument("--balanced-cap", type=float, default=4.0,
+                        help="单张图的最大采样权重（默认 4.0，防止罕见类把常见类挤没）")
+    parser.add_argument("--loss", default="focal", choices=["focal", "asl"],
+                        help="损失函数：focal=原来的 Focal+加权BCE；"
+                             "asl=Asymmetric Loss（负样本大幅降权、正样本不降权），"
+                             "专治罕见类信号被海量负样本淹没")
+    parser.add_argument("--asl-gamma-neg", type=float, default=4.0,
+                        help="ASL 负样本的聚焦强度（默认 4.0；调小=更保守）")
+    parser.add_argument("--asl-clip", type=float, default=0.05,
+                        help="ASL 负样本概率平移量（默认 0.05；0=不平移）")
     parser.add_argument("--train-csv", default=None,
                         help="自定义训练 CSV（患者级 K 折用，见 make_folds.py）")
     parser.add_argument("--val-csv", default=None,
@@ -185,8 +205,29 @@ def main():
 
     train_ds = ChestXrayDataset(train_rows, train_split,
                                 transform=make_train_tfms(args.img_size))
+    train_labels = encode_labels(train_rows)
+
+    # ---------- 类别平衡采样（专攻罕见类，尤其是类1） ----------
+    # 病根：类1 只有 894 个正样本（2.95%），而 Macro AUC 十类等权，它一个人就能压掉 0.008。
+    # pos_weight 只改"错判的惩罚"，不改变"见过的次数"；采样才真正改变样本量——所以它和权重是两件事。
+    sampler = None
+    if args.balanced_sampler > 0:
+        freq = train_labels.sum(axis=0).astype(np.float64)          # 每类正样本数
+        cls_w = (len(train_labels) / np.maximum(freq, 1.0)) ** args.balanced_sampler
+        w = np.ones(len(train_labels), dtype=np.float64)
+        for c in range(train_labels.shape[1]):
+            w += train_labels[:, c] * (cls_w[c] - 1.0)               # 含罕见类的图 → 权重更高
+        w = np.clip(w, 1.0, args.balanced_cap)
+        sampler = WeightedRandomSampler(torch.as_tensor(w), num_samples=len(w),
+                                        replacement=True)
+        print(f"[平衡采样] alpha={args.balanced_sampler} cap={args.balanced_cap} | "
+              f"每类权重 {[f'{x:.1f}' for x in cls_w.tolist()]}")
+        print(f"[平衡采样] 图片权重 min {w.min():.2f} / mean {w.mean():.2f} / max {w.max():.2f}"
+              f"（类1 的图约被多采 {min(cls_w[0], args.balanced_cap):.1f} 倍）")
+
     train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True,
+        train_ds, batch_size=args.batch_size,
+        shuffle=(sampler is None), sampler=sampler,
         num_workers=args.workers, pin_memory=(device.type == "cuda"),
         drop_last=len(train_ds) > args.batch_size, persistent_workers=args.workers > 0,
     )
@@ -217,14 +258,25 @@ def main():
         print(f"使用 {torch.cuda.device_count()} 块 GPU（DataParallel）")
         model = torch.nn.DataParallel(model)
 
-    train_labels = encode_labels(train_rows)
-    pos_weights = calculate_pos_weights(train_labels, beta=POS_WEIGHT_BETA,
-                                        cap=POS_WEIGHT_CAP).to(device)
-    print("各类别 pos_weight:", [f"{w:.2f}" for w in pos_weights.tolist()])
+    # train_labels 已在构建 DataLoader 之前算好（平衡采样要用）
+    # pos_weight 上限可调：Macro AUC 十类等权，罕见类（类1 仅 894 正样本）是最弱的一环，
+    # 按 effective-number 公式类1 应得约 32.9，但默认封顶 10。把 cap 调高是"专攻罕见类"
+    # 最便宜的一个旋钮（零代码改动，只换一个数），值得单独做一组消融。
+    pos_weights = calculate_pos_weights(train_labels, beta=args.pos_beta,
+                                        cap=args.pos_cap).to(device)
+    print(f"各类别 pos_weight（beta={args.pos_beta}, cap={args.pos_cap}）:",
+          [f"{w:.2f}" for w in pos_weights.tolist()])
     print(f"EMA: 每训练步更新一次 | decay {EMA_DECAY}（带 warmup）"
           f" | 每轮约 {len(train_loader)} 次更新")
-    criterion = WeightedFocalBCELoss(alpha=FOCAL_ALPHA, gamma=FOCAL_GAMMA,
-                                     pos_weights=pos_weights, mix=FOCAL_MIX)
+    if args.loss == "asl":
+        criterion = AsymmetricLoss(gamma_neg=args.asl_gamma_neg, gamma_pos=0.0,
+                                   clip=args.asl_clip)
+        print(f"损失: ASL（gamma_neg={args.asl_gamma_neg}, clip={args.asl_clip}）"
+              f"—— 负样本大幅降权，正样本不降权；此时 pos_weight 不再参与")
+    else:
+        criterion = WeightedFocalBCELoss(alpha=FOCAL_ALPHA, gamma=FOCAL_GAMMA,
+                                         pos_weights=pos_weights, mix=FOCAL_MIX)
+        print(f"损失: Focal×{FOCAL_MIX} + 加权BCE×{1 - FOCAL_MIX:.1f}")
     optimizer = build_optimizer(get_model(model), lr=lr)
     total_steps = args.epochs * len(train_loader)
     scheduler = make_scheduler(optimizer, total_steps)
@@ -283,6 +335,9 @@ def main():
                     "model_state_dict": ema.ema.state_dict(),
                     "epoch": epoch + 1, "backbone": backbone,
                     "img_size": args.img_size,
+                    # 训练用的源图边长（data600 → 600，data1024 → 1024）。
+                    # 推理端靠这个值决定 draft 解码尺度，必须与训练一致。
+                    "src_size": int(os.environ.get("CXR_SRC_SIZE", 600)),
                     "num_classes": get_model(model).num_classes,
                     "study_auc": study_auc,
                 }, os.path.join(out_dir, "best.pth"))
@@ -296,6 +351,7 @@ def main():
             "model_state_dict": ema.ema.state_dict(),
             "epoch": epoch + 1, "backbone": backbone,
             "img_size": args.img_size,
+            "src_size": int(os.environ.get("CXR_SRC_SIZE", 600)),
             "num_classes": get_model(model).num_classes,
         }, os.path.join(out_dir, f"ema_f{epoch + 1}.pth"))
 

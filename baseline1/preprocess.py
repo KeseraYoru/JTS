@@ -25,13 +25,17 @@ from config import DATA_ROOT, PREP_QUALITY, PREP_ROOT, PREP_SIZE, SPLITS
 
 
 def _resize_one(task):
-    in_path, out_path = task
+    in_path, out_path, size = task
     if os.path.exists(out_path):
         return "skipped"  # 已存在则跳过，重跑不用再花半小时
     try:
         with Image.open(in_path) as img:
+            # ★ draft：让 libjpeg 直接按 1/N 尺度解码（3056px → 764 或 1528）。
+            #   反正最终要缩到 size，没必要把 900 万像素全解出来 —— 解码快 4~8 倍，
+            #   而因为本来就是降采样，画质差异可忽略。PNG 会静默忽略此调用。
+            img.draft("RGB", (size, size))
             img = img.convert("RGB")
-            img = img.resize((PREP_SIZE, PREP_SIZE), Image.BILINEAR)
+            img = img.resize((size, size), Image.BILINEAR)
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             img.save(out_path, "JPEG", quality=PREP_QUALITY, optimize=True)
         return None
@@ -39,35 +43,39 @@ def _resize_one(task):
         return f"{in_path}: {e}"
 
 
-def collect_tasks(splits, data_root, prep_root, limit=None):
-    """按 CSV 列出所有 (原图路径, 输出路径)，保证不重不漏。"""
+def collect_tasks(splits, data_root, prep_root, limit=None, size=PREP_SIZE):
+    """按 CSV 列出所有 (原图路径, 输出路径, 目标尺寸)，保证不重不漏。"""
     tasks = []
     for split in splits:
         for row in read_split_csv(split, data_root):
             tasks.append((raw_img_path(row, split, data_root),
                           os.path.join(prep_root, split, row["Subject_id"],
-                                       row["Study_id"], row["Dicom_id"] + ".jpg")))
+                                       row["Study_id"], row["Dicom_id"] + ".jpg"),
+                          size))
     if limit:
         tasks = tasks[:limit]
     return tasks
 
 
 def main():
-    parser = argparse.ArgumentParser(description="大图 -> 600x600 预处理")
+    parser = argparse.ArgumentParser(description="大图 -> 正方形预处理")
     parser.add_argument("--split", default="all",
                         help="train / valid / test / all（默认 all）")
     parser.add_argument("--limit", type=int, default=0,
                         help="只处理前 N 张，调试用（0 = 全部）")
     parser.add_argument("--data-root", default=DATA_ROOT)
     parser.add_argument("--prep-root", default=PREP_ROOT)
+    parser.add_argument("--size", type=int, default=PREP_SIZE,
+                        help="输出边长（默认取 config.PREP_SIZE=600）。"
+                             "要喂 448/512 训练就出 600；要做多尺度裁剪(scale<1)或 640px 再出 1024。")
     parser.add_argument("--workers", type=int, default=max(1, cpu_count() - 1))
     args = parser.parse_args()
 
     splits = list(SPLITS) if args.split == "all" else [args.split]
     tasks = collect_tasks(splits, args.data_root, args.prep_root,
-                          args.limit or None)
+                          args.limit or None, args.size)
     print(f"待处理 {len(tasks)} 张 -> {args.prep_root}"
-          f"（{PREP_SIZE}x{PREP_SIZE}, JPEG q{PREP_QUALITY}, "
+          f"（{args.size}x{args.size}, JPEG q{PREP_QUALITY}, "
           f"{args.workers} 进程）")
 
     errors, skipped = [], 0

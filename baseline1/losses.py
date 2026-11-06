@@ -48,6 +48,63 @@ class WeightedFocalBCELoss(nn.Module):
             (1 - self.mix) * self.bce(inputs, targets)
 
 
+class AsymmetricLoss(nn.Module):
+    """ASL（Asymmetric Loss for Multi-Label Classification）。
+
+    为什么它能帮到罕见类
+    -------------------
+    多标签数据里 99% 的 (图, 类) 组合是负样本。Focal 对所有错误"一视同仁"地降权，
+    ASL 则**非对称**地处理：
+      - 正样本（罕见类的那 894 个）：gamma_pos 通常取 0，不做降权 —— 每个正样本都很珍贵；
+      - 负样本（海量的"没这个病"）：gamma_neg 取 4 左右，**大幅降权**，
+        并且先把概率往 0 方向平移一个 clip（默认 0.05），把"明显是负样本"的直接压到 0 权重。
+    效果是：梯度几乎全来自"难负样本 + 所有正样本"，罕见类的信号不会被淹没。
+
+    与 pos_weight 的区别（A6 已验证 pos_weight 无效，正因为方向不同）：
+      pos_weight 只放大正样本的惩罚倍数，**分母里的海量负样本仍在参与**；
+      ASL 是把负样本的权重真正压到接近 0，等于把"信噪比"提上去了。
+
+    参考：Ben-Baruch et al., "Asymmetric Loss For Multi-Label Classification" (ICCV 2021).
+    """
+
+    def __init__(self, gamma_neg=4.0, gamma_pos=0.0, clip=0.05, eps=1e-8,
+                 reduction="mean"):
+        super().__init__()
+        self.gamma_neg = gamma_neg
+        self.gamma_pos = gamma_pos
+        self.clip = clip
+        self.eps = eps
+        self.reduction = reduction
+        self.symmetric = gamma_neg == gamma_pos
+
+    def forward(self, logits, targets):
+        targets = targets.float()
+        xs_pos = torch.sigmoid(logits)
+        xs_neg = 1.0 - xs_pos
+
+        # 负样本概率平移：把"确信是负"的压到 0，进一步减少它们占用的梯度
+        if self.clip > 0 and not self.symmetric:
+            xs_neg = (xs_neg + self.clip).clamp(max=1.0)
+
+        los_pos = targets * torch.log(xs_pos.clamp(min=self.eps))
+        los_neg = (1.0 - targets) * torch.log(xs_neg.clamp(min=self.eps))
+        loss = los_pos + los_neg
+
+        if self.gamma_pos > 0 or self.gamma_neg > 0:
+            pt0 = xs_pos * targets
+            pt1 = xs_neg * (1.0 - targets)
+            pt = pt0 + pt1
+            one_sided_gamma = self.gamma_pos * targets + self.gamma_neg * (1.0 - targets)
+            loss = loss * torch.pow((1.0 - pt).clamp(min=0.0), one_sided_gamma)
+
+        loss = -loss
+        if self.reduction == "mean":
+            return loss.mean()
+        if self.reduction == "sum":
+            return loss.sum()
+        return loss
+
+
 def calculate_pos_weights(label_matrix, beta=0.9999, cap=10.0):
     """按 effective number of samples（Class-Balanced Loss 论文）计算每类正样本权重。
 

@@ -30,7 +30,7 @@ from collections import Counter, defaultdict
 import numpy as np
 import torch
 
-from inference import load_model_for_inference, predict_one_path
+from inference import load_model_for_inference, predict_one_path_multi
 
 
 # ---------------- 工具 ----------------
@@ -146,6 +146,9 @@ def main():
     parser.add_argument("--tta", action="store_true", help="与提交保持一致时须开启")
     parser.add_argument("--rounds", type=int, default=3, help="计时轮数（规则要求 3）")
     parser.add_argument("--limit", type=int, default=0, help="本地自测：只用前 N 张")
+    parser.add_argument("--img-size", type=int, default=0,
+                        help="覆盖 ckpt 里的推理尺寸（0=用 ckpt 原值）。"
+                             "与 predict.py 的 --img-size 必须保持一致，否则一致性核验会挂")
     parser.add_argument("--no-check", action="store_true", help="跳过一致性核验（仅测速）")
     args = parser.parse_args()
 
@@ -158,11 +161,29 @@ def main():
     precision = "fp16 (AMP 自动混合精度)" if use_amp else "fp32"
 
     ckpts, tta, agg = resolve_settings(args)
-    model, meta = load_model_for_inference(ckpts[0], device)
+
+    # ★ 支持多模型集成（规则第 6 条允许"多模型集成：多个固定模型投票或平均"）。
+    #   关键：计时必须覆盖**全部**模型的推理，否则报出来的耗时是低报的；
+    #   预测也必须与 predict.py 一致地取平均，否则和 submission.csv 对不上。
+    models, metas = [], []
+    for cp in ckpts:
+        m_i, meta_i = load_model_for_inference(cp, device,
+                                               img_size=args.img_size or None)
+        models.append(m_i)
+        metas.append(meta_i)
+    meta = metas[0]
     img_size = meta["img_size"]
-    print(f"设备: {device} | 推理精度: {precision} | 骨干: {meta['backbone']} "
-          f"| 输入 {img_size}px | TTA: {tta} | 聚合: {agg}")
-    print(f"权重: {ckpts[0]}")
+    # draft 解码尺度必须与 predict.py 完全一致，否则两条路像素不同、
+    #   一致性核验（规则第 7 条）会挂。src_size 存在 ckpt 里，双方都从它取值。
+    src_size = meta.get("src_size")
+    backbones = " + ".join(m["backbone"] for m in metas)
+    print(f"设备: {device} | 推理精度: {precision} | 骨干: {backbones} "
+          f"| 输入 {img_size}px | draft {src_size}px | TTA: {tta} | 聚合: {agg}")
+    print(f"权重（{len(models)} 个，等权平均）:")
+    for cp in ckpts:
+        print(f"  - {cp}")
+    if img_size != metas[-1]["img_size"]:
+        raise SystemExit("多个 ckpt 的 img_size 不一致，无法集成推理")
 
     # ---------- 图片 ----------
     warm_imgs = list_images(args.pictures_5)
@@ -177,12 +198,15 @@ def main():
     print(f"预热图 {len(warm_imgs)} 张 | 计时图 {len(test_imgs)} 张")
 
     # ---------- 预热（不计入成绩） ----------
+    # 多模型共享一次读图+预处理（否则同一张原图会被重复解码 N 遍，白白吃掉耗时预算）
     for p in warm_imgs:
-        predict_one_path(model, p, img_size, device, tta=tta, use_amp=use_amp)
+        predict_one_path_multi(models, p, img_size, device, tta=tta,
+                               use_amp=use_amp, src_size=src_size)
     if device.type == "cuda":
         torch.cuda.synchronize()
 
     # ---------- 计时：每张跑 rounds 轮，逐张取均值 ----------
+    # 计时区间内跑完**全部模型**并取平均，这才是真实的端到端成本
     per_image_times = []
     last_probs = {}
     for round_idx in range(args.rounds):
@@ -191,8 +215,8 @@ def main():
             if device.type == "cuda":
                 torch.cuda.synchronize()
             t0 = time.perf_counter()
-            probs = predict_one_path(model, p, img_size, device, tta=tta,
-                                     use_amp=use_amp)
+            probs = predict_one_path_multi(models, p, img_size, device, tta=tta,
+                                           use_amp=use_amp, src_size=src_size)
             if device.type == "cuda":
                 torch.cuda.synchronize()
             times_this_round.append((time.perf_counter() - t0) * 1000.0)

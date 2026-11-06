@@ -80,6 +80,11 @@ def main():
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--out", default=SSL_OUT)
+    parser.add_argument("--save-every", type=int, default=0,
+                        help="每 N 轮额外存一个中间骨干（如 50 → ssl_e50.pth）。"
+                             "0 = 不存。用途：一次长跑拿回一条「SSL 轮数 vs 迁移效果」曲线，"
+                             "避免凭感觉赌「越多越好」——20 轮时特征变化幅度已达 1.259，"
+                             "继续跑未必更好。")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -137,6 +142,21 @@ def main():
             n += v1.size(0)
         print(f"SSL Epoch {epoch + 1}/{args.epochs} | loss {total / max(1, n):.4f} "
               f"| {time.time() - t0:.0f}s")
+
+        # 定期存中间骨干：一次长跑换回多条候选（配合 train.py 的 2 轮探针即可选出最优轮数）
+        if args.save_every and (epoch + 1) % args.save_every == 0:
+            _inner = model.module if hasattr(model, "module") else model
+            p = os.path.join(os.path.dirname(os.path.abspath(args.out)),
+                             f"ssl_e{epoch + 1}.pth")
+            torch.save({
+                "backbone": _inner.encoder.state_dict(),
+                "backbone_name": args.backbone,
+                "img_size": args.img_size,
+                "epochs": epoch + 1,
+                "data": "official train split only",
+                "method": "SimCLR",
+            }, p)
+            print(f"  已存中间权重 {p}")
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     inner = model.module if hasattr(model, "module") else model

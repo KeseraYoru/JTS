@@ -15,8 +15,11 @@ import torch.nn as nn
 from config import BACKBONE, DROPOUT, HEAD_LR_MULT, LR, NUM_CLASSES, WEIGHT_DECAY
 
 # 允许的骨干（都来自 torchvision，ImageNet-1k 预训练）
-BACKBONE_CHOICES = ("convnext_base", "convnext_small", "efficientnet_v2_m",
-                    "swin_b", "vit_b_16", "resnet50")
+# convnext_large（197M 参数 / fp16 约 394MB）是唯一「单模型就能压进 500MB 且算力翻倍」的选项：
+# 双模型 @448 在 T4 上推算 111ms 有超限风险，而 large 单模型 @384 约 73ms，同时精度预期更高。
+BACKBONE_CHOICES = ("convnext_base", "convnext_small", "convnext_large",
+                    "convnext_tiny", "efficientnet_v2_m", "efficientnet_v2_s",
+                    "swin_b", "swin_t", "vit_b_16", "resnet50")
 
 
 def _build_vision(name, pretrained=True):
@@ -117,22 +120,52 @@ def build_optimizer(model, lr=LR, head_lr_mult=HEAD_LR_MULT,
 
 
 def set_backbone_trainable(model, flag):
-    """冻结/解冻骨干（只影响 requires_grad，不改变已学到的权重）。"""
-    for p in model.backbone.parameters():
+    """冻结/解冻骨干（只影响 requires_grad，不改变已学到的权重）。
+
+    ⚠ 必须先用 get_model() 剥掉 DataParallel：train.py 在多卡下把模型包成
+      DataParallel，而 DataParallel 对象本身没有 .backbone 属性，
+      直接 model.backbone 会 AttributeError（2026-11-02 用 --freeze-epochs 1 踩到过）。
+      注意这不影响 nn.Module 的行为语义，只是属性转发问题。
+    """
+    inner = get_model(model)
+    for p in inner.backbone.parameters():
         p.requires_grad_(flag)
 
 
 # ---------------- 加载自监督预训练权重 ----------------
 def load_ssl_backbone(model, ssl_path):
-    """把自监督阶段训练好的骨干权重灌进模型（规则补充四允许）。"""
+    """把自监督阶段训练好的骨干权重灌进模型（规则补充四允许）。
+
+    ⚠ 必须按「键名 + 形状」双重过滤后再灌：
+      `load_state_dict(strict=False)` 只容忍「某边多键/缺键」，
+      但**同名而形状不同会直接抛 RuntimeError**。
+      典型场景：拿 convnext 的 SSL 权重去初始化 efficientnet ——
+      第一层卷积 convnext 是 4x4/128ch，efficientnet_v2_m 是 3x3/24ch，
+      于是 features.0.0.weight 形状不匹配 → 整个训练启动失败（2026-11-03 踩到）。
+    """
     ckpt = torch.load(ssl_path, map_location="cpu", weights_only=False)
     state = ckpt.get("backbone", ckpt)
     # 兼容保存时带 "backbone." 前缀的情况
     if state and next(iter(state)).startswith("backbone."):
         state = {k[len("backbone."):]: v for k, v in state.items()}
-    missing, unexpected = model.backbone.load_state_dict(state, strict=False)
-    print(f"[SSL] 已加载自监督骨干: {ssl_path} | 缺失 {len(missing)} | "
-          f"多余 {len(unexpected)}")
+
+    target = model.backbone.state_dict()
+    filtered, skipped = {}, []
+    for k, v in state.items():
+        if k in target and tuple(target[k].shape) == tuple(v.shape):
+            filtered[k] = v
+        else:
+            skipped.append(k)
+
+    model.backbone.load_state_dict(filtered, strict=False)
+    print(f"[SSL] {ssl_path}")
+    print(f"[SSL] 已加载 {len(filtered)} 个键 | 跳过 {len(skipped)} 个（形状或命名不匹配）")
+    if not filtered:
+        print("[SSL] ⚠ 没有任何键匹配 —— 该骨干与 SSL 权重不是同一架构，"
+              "本次等同纯 ImageNet 起点（这不算错误，但要在台账里注明）")
+    elif len(filtered) < 0.5 * len(target):
+        print(f"[SSL] ⚠ 只匹配到 {len(filtered)}/{len(target)} 个键，"
+              "迁移效果会打折扣")
     return model
 
 
