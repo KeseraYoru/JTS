@@ -69,7 +69,7 @@ for t in "${TASKS[@]}"; do
   gpu="${t%%|*}"; rest="${t#*|}"; name="${rest%%|*}"; cmd="${rest#*|}"
 
   if [ -f "runs/$name/best.pth" ]; then
-    say "  跳过 $name（已有 best.pth，断点续跑）"
+    say "  跳过 ${name}（已有 best.pth，断点续跑）"
     continue
   fi
 
@@ -85,7 +85,7 @@ else
   for p in "${PIDS[@]}"; do
     pid="${p%%:*}"; name="${p#*:}"
     if wait "$pid"; then
-      say "  ✓ $name（累计 $(( (SECONDS - START) / 60 )) 分钟）"
+      say "  ✓ ${name}（累计 $(( (SECONDS - START) / 60 )) 分钟）"
     else
       say "  ✗ $name 失败，见 $LOG/$name.log"
       grep -qi "out of memory" "$LOG/$name.log" 2>/dev/null && say "     → OOM，重跑请 BS=8"

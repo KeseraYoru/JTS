@@ -58,22 +58,22 @@ run_job() {
   local out="runs/$name"
 
   if [ -f "$out/best.pth" ]; then
-    say "跳过 $name：已有 best.pth（断点续跑）"
+    say "跳过 ${name}：已有 best.pth（断点续跑）"
     return 0
   fi
   if [ "$(remain)" -lt "$est" ]; then
-    say "跳过 $name：剩余 $(remain) 分钟 < 预计 ${est} 分钟"
+    say "跳过 ${name}：剩余 $(remain) 分钟 < 预计 ${est} 分钟"
     return 1
   fi
 
   local gpu; gpu=$(wait_gpu "$need")
   if [ -z "$gpu" ]; then
-    say "跳过 $name：等 20 分钟仍无 >=$((need/1024))GB 空闲的卡"
+    say "跳过 ${name}：等 20 分钟仍无 >=$((need/1024))GB 空闲的卡"
     return 1
   fi
 
   local free_mb; free_mb=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "$gpu")
-  say "▶ $name ｜GPU$gpu（空闲 ${free_mb}MiB）｜batch $BS｜预计 ${est} 分钟｜剩余 $(remain) 分钟"
+  say "▶ $name ｜GPU${gpu}（空闲 ${free_mb}MiB）｜batch ${BS}｜预计 ${est} 分钟｜剩余 $(remain) 分钟"
   CUDA_VISIBLE_DEVICES="$gpu" PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     "$@" 2>&1 | tee "$LOG/$name.log"
   local rc=${PIPESTATUS[0]}
@@ -82,14 +82,14 @@ run_job() {
     if grep -qi "out of memory" "$LOG/$name.log"; then
       say "✗ $name 显存不足。重跑时把 batch 调小：BS=8 bash run_night_members.sh"
     else
-      say "✗ $name 失败（退出码 $rc），见 $LOG/$name.log 末尾"
+      say "✗ $name 失败（退出码 ${rc}），见 $LOG/$name.log 末尾"
     fi
     return 1
   fi
 
   # 顺手清掉每轮的 EMA 快照（每份 45~380MB，留着没用，best.pth 才是要交的）
   find "$out" -name "ema_f*.pth" -delete 2>/dev/null
-  say "✓ 完成 $name（累计 $(( (SECONDS - START) / 60 )) 分钟，剩余 $(remain) 分钟）"
+  say "✓ 完成 ${name}（累计 $(( (SECONDS - START) / 60 )) 分钟，剩余 $(remain) 分钟）"
   return 0
 }
 

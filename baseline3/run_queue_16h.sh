@@ -73,13 +73,13 @@ lane() {
     local est="${rest%%|*}"; local cmd="${rest#*|}"
 
     if [ -f "runs/$name/best.pth" ]; then
-      say "  [GPU$gpu] 跳过 $name（已存在 best.pth）"; continue
+      say "  [GPU$gpu] 跳过 ${name}（已存在 best.pth）"; continue
     fi
     if [ "$(remain)" -lt "$est" ]; then
-      say "  [GPU$gpu] 跳过 $name（剩余 $(remain) 分钟 < 预计 ${est}）"; continue
+      say "  [GPU$gpu] 跳过 ${name}（剩余 $(remain) 分钟 < 预计 ${est}）"; continue
     fi
 
-    say "  [GPU$gpu] ▶ $name（预计 ${est} 分钟，剩余 $(remain)）"
+    say "  [GPU$gpu] ▶ ${name}（预计 ${est} 分钟，剩余 $(remain)）"
     local t0=$SECONDS
     CUDA_VISIBLE_DEVICES="$gpu" PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
       bash -c "$cmd" > "$LOG/$name.log" 2>&1
@@ -87,9 +87,9 @@ lane() {
     local used=$(( (SECONDS - t0) / 60 ))
 
     if [ "$rc" -eq 0 ]; then
-      say "  [GPU$gpu] ✓ $name（实际 ${used} 分钟）"
+      say "  [GPU$gpu] ✓ ${name}（实际 ${used} 分钟）"
     else
-      say "  [GPU$gpu] ✗ $name 失败（码 $rc，${used} 分钟），日志 $LOG/$name.log"
+      say "  [GPU$gpu] ✗ $name 失败（码 ${rc}，${used} 分钟），日志 $LOG/$name.log"
       grep -qi "out of memory" "$LOG/$name.log" 2>/dev/null && say "      → OOM：下次用 BS=8 重跑"
     fi
   done
@@ -134,7 +134,7 @@ for name in cnx30_strong eff30_strong cnx_small30 in22k30 effv2s30 swin_b30; do
   [ -f "runs/$name/pt.npz" ] || \
     CUDA_VISIBLE_DEVICES="$G0" python -u predict3.py --split test \
       --ckpt "runs/$name/best.pth" --out "runs/$name/pt.npz" >>"$LOG/predict.log" 2>&1
-  [ -f "runs/$name/pt.npz" ] && say "  ✓ $name" || say "  ✗ $name（见 $LOG/predict.log）"
+  [ -f "runs/$name/pt.npz" ] && say "  ✓ $name" || say "  ✗ ${name}（见 $LOG/predict.log）"
 done
 
 # =============================================================================

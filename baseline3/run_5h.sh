@@ -65,21 +65,21 @@ run_job() {
   local out="runs/$name"
 
   if [ -f "$out/best.pth" ]; then
-    say "跳过 $name：已存在 $out/best.pth（断点续跑）"
+    say "跳过 ${name}：已存在 $out/best.pth（断点续跑）"
     return 0
   fi
   if [ "$(remain)" -lt "$est" ]; then
-    say "跳过 $name：剩余 $(remain) 分钟 < 预计 ${est} 分钟"
+    say "跳过 ${name}：剩余 $(remain) 分钟 < 预计 ${est} 分钟"
     return 1
   fi
 
   local gpu; gpu=$(wait_gpu)
   if [ -z "$gpu" ]; then
-    say "跳过 $name：等了 20 分钟仍无可用 GPU"
+    say "跳过 ${name}：等了 20 分钟仍无可用 GPU"
     return 1
   fi
 
-  say "▶ 开始 $name ｜GPU$gpu｜batch $BS｜预计 ${est} 分钟｜剩余 $(remain) 分钟"
+  say "▶ 开始 $name ｜GPU${gpu}｜batch ${BS}｜预计 ${est} 分钟｜剩余 $(remain) 分钟"
   CUDA_VISIBLE_DEVICES="$gpu" PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     "$@" 2>&1 | tee "$LOG/$name.log"
   local rc=${PIPESTATUS[0]}
@@ -88,11 +88,11 @@ run_job() {
     if grep -qi "out of memory" "$LOG/$name.log"; then
       say "✗ $name 显存不足（OOM）。建议重跑时把 BS 降到 8：BS=8 bash run_5h.sh"
     else
-      say "✗ $name 失败（退出码 $rc），详见 $LOG/$name.log 末尾"
+      say "✗ $name 失败（退出码 ${rc}），详见 $LOG/$name.log 末尾"
     fi
     return 1
   fi
-  say "✓ 完成 $name（累计已用 $(( (SECONDS - START) / 60 )) 分钟，剩余 $(remain) 分钟）"
+  say "✓ 完成 ${name}（累计已用 $(( (SECONDS - START) / 60 )) 分钟，剩余 $(remain) 分钟）"
   return 0
 }
 
@@ -142,14 +142,14 @@ if [ -f runs/f0_ssl_mild/metrics.json ] && [ -f runs/f0_ssl_strong/metrics.json 
   read -r S_AUC S_EP <<<"$(peak runs/f0_ssl_strong/metrics.json)"
   AUG_WIN=$(python -c "print('strong' if $S_AUC - $M_AUC >= 0.003 else 'mild')")
   say "mild 峰值 $M_AUC (ep$M_EP) ｜ strong 峰值 $S_AUC (ep$S_EP) ｜ Δ $(python -c "print(f'{$S_AUC-$M_AUC:+.4f}')")"
-  say "→ 增强档位判定：$AUG_WIN（门槛 Δ ≥ +0.003）"
+  say "→ 增强档位判定：${AUG_WIN}（门槛 Δ ≥ +0.003）"
 fi
 echo "$AUG_WIN" > "$LOG/aug_winner.txt"
 
 # =============================================================================
 # 阶段 2：用胜出的增强档跑全量（30344 张），产出可用于提交的模型
 # =============================================================================
-say "【阶段 2】全量训练（aug=$AUG_WIN）"
+say "【阶段 2】全量训练（aug=${AUG_WIN}）"
 if [ "$AUG_WIN" = "strong" ]; then
   run_job full_aug_winner 75 \
     python -u train3.py --arch convnext_base --img-size 448 --batch-size "$BS" \

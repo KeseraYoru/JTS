@@ -57,15 +57,15 @@ lane() {
   for spec in "$@"; do
     local name="${spec%%|*}"; local rest="${spec#*|}"
     local est="${rest%%|*}"; local cmd="${rest#*|}"
-    if [ -f "runs/$name/best.pth" ]; then say "  [G$gpu] 跳过 $name（已存在）"; continue; fi
-    if [ "$(remain)" -lt "$est" ]; then say "  [G$gpu] 跳过 $name（剩余 $(remain) < ${est}）"; continue; fi
-    say "  [G$gpu] ▶ $name（预计 ${est} 分钟，剩余 $(remain)）"
+    if [ -f "runs/$name/best.pth" ]; then say "  [G$gpu] 跳过 ${name}（已存在）"; continue; fi
+    if [ "$(remain)" -lt "$est" ]; then say "  [G$gpu] 跳过 ${name}（剩余 $(remain) < ${est}）"; continue; fi
+    say "  [G$gpu] ▶ ${name}（预计 ${est} 分钟，剩余 $(remain)）"
     local t0=$SECONDS
     CUDA_VISIBLE_DEVICES="$gpu" PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
       bash -c "$cmd" > "$LOG/$name.log" 2>&1
     local rc=$? used=$(( (SECONDS - t0) / 60 ))
-    [ "$rc" -eq 0 ] && say "  [G$gpu] ✓ $name（${used} 分钟）" \
-                    || say "  [G$gpu] ✗ $name（码 $rc，${used} 分钟）见 $LOG/$name.log"
+    [ "$rc" -eq 0 ] && say "  [G$gpu] ✓ ${name}（${used} 分钟）" \
+                    || say "  [G$gpu] ✗ ${name}（码 ${rc}，${used} 分钟）见 $LOG/$name.log"
   done
 }
 

@@ -34,13 +34,13 @@ if [ -z "$W" ]; then
   echo "  ls -lh convnext_base_22k_1k_224.pth    # 必须约 338MB；不够就再跑一次（会续传）"
   exit 1
 fi
-echo "使用权重: $W（$(( $(wc -c < "$W") / 1024 / 1024 ))MB）"
+echo "使用权重: ${W}（$(( $(wc -c < "$W") / 1024 / 1024 ))MB）"
 
 # 统一的训练入口；产物已存在则跳过（断线可续）
 run () {
   local name="$1"; shift
   if [ -f "runs/$name/best.pth" ]; then
-    echo "== 跳过 $name（已有 best.pth）=="; return 0
+    echo "== 跳过 ${name}（已有 best.pth）=="; return 0
   fi
   echo "== 开始 $name  $(date '+%H:%M:%S') =="
   python -u train3.py "$@" --out "runs/$name" 2>&1 | tee "runs/$name.log"

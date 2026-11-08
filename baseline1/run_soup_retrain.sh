@@ -59,18 +59,18 @@ run_job() {
   local out="runs/$name"
 
   if [ -f "$out/best.pth" ] && ls "$out"/ema_f*.pth >/dev/null 2>&1; then
-    say "跳过 $name：best.pth 与 ema_f*.pth 都在（断点续跑）"
+    say "跳过 ${name}：best.pth 与 ema_f*.pth 都在（断点续跑）"
     return 0
   fi
   if [ "$(remain)" -lt "$est" ]; then
-    say "跳过 $name：剩余 $(remain) 分钟 < 预计 ${est} 分钟"
+    say "跳过 ${name}：剩余 $(remain) 分钟 < 预计 ${est} 分钟"
     return 1
   fi
 
   local gpu; gpu=$(wait_gpu 9000)
-  if [ -z "$gpu" ]; then say "跳过 $name：无 >=9GB 空闲的卡"; return 1; fi
+  if [ -z "$gpu" ]; then say "跳过 ${name}：无 >=9GB 空闲的卡"; return 1; fi
 
-  say "▶ $name ｜GPU$gpu｜batch $BS｜预计 ${est} 分钟｜剩余 $(remain) 分钟"
+  say "▶ $name ｜GPU${gpu}｜batch ${BS}｜预计 ${est} 分钟｜剩余 $(remain) 分钟"
   CUDA_VISIBLE_DEVICES="$gpu" PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     "$@" 2>&1 | tee "$LOG/$name.log"
   local rc=${PIPESTATUS[0]}
@@ -79,11 +79,11 @@ run_job() {
     if grep -qi "out of memory" "$LOG/$name.log"; then
       say "✗ $name OOM。重跑请用 BS=8"
     else
-      say "✗ $name 失败（$rc），见 $LOG/$name.log"
+      say "✗ $name 失败（${rc}），见 $LOG/$name.log"
     fi
     return 1
   fi
-  say "✓ 完成 $name（累计 $(( (SECONDS - START) / 60 )) 分钟，剩余 $(remain) 分钟）"
+  say "✓ 完成 ${name}（累计 $(( (SECONDS - START) / 60 )) 分钟，剩余 $(remain) 分钟）"
   return 0
 }
 
@@ -126,13 +126,13 @@ for run in soup_cnx soup_eff; do
     while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(last_epochs "runs/$run" "$k")
     cnt=${#files[@]}
     if [ "$cnt" -lt 2 ]; then
-      say "  跳过 $run 的 last$k：可用轮数只有 $cnt"
+      say "  跳过 $run 的 last${k}：可用轮数只有 $cnt"
       continue
     fi
     out="runs/$run/soup_last$k.pth"
     if [ -f "$out" ]; then say "  已存在 $out"; continue; fi
     $SOUP --ckpt "${files[@]}" --out "$out" >>"$LOG/soup.log" 2>&1 \
-      && say "  ✓ $out（平均 $cnt 轮）" || say "  ✗ $out 失败"
+      && say "  ✓ ${out}（平均 $cnt 轮）" || say "  ✗ $out 失败"
   done
 done
 
