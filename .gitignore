@@ -1,12 +1,62 @@
-# 数据集与归档（绝不进 git）
+# ============================================================
+# 胸部 X 光多标签分类 · git 忽略规则
+# 原则：代码与文档入库；数据、权重、实验产物、压缩包一律不入库
+# 数据与重量的迁移靠 rsync，见 MIGRATE.md
+# ============================================================
+
+# ---------- 1. 数据集（52G，绝不入库）----------
 cxr_first/
+data600/
+data1024/
+data384/
+
+# ---------- 2. 预训练与训练权重 ----------
+# GitHub 单文件上限 100MB，338M 的 ImageNet 权重必须走 rsync
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.onnx
+dl/
+weights/
+
+# ---------- 3. 实验产物 ----------
+# 训练输出、预测 npz、计时目录
+runs/
+pictures_100/
+pictures_5/
+package/
+*.npz
+*.npy
+
+# ---------- 4. results：只放行"保底提交物" ----------
+results/*
+!results/submission_7767_ens.csv
+
+# ---------- 5. 压缩包与临时包 ----------
 *.zip
+*.tgz
+*.tar
+*.tar.gz
+*.7z
 
-# 系统垃圾
+# ---------- 6. Python / 缓存 ----------
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+*.egg-info/
+
+# ---------- 7. 系统与编辑器 ----------
 .DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+*~
 
-# 注意：baseline/ 下的大文件由 baseline/.gitignore 管辖
-# （data600/ runs/ weights/ third_party/ 已被忽略）
-
-# 下载回来的实验产物（提交文件、npz 预测、metrics）
-results/
+# ---------- 8. 运行日志 ----------
+*.log
+nohup.out

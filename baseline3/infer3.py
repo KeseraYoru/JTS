@@ -30,9 +30,11 @@ def load_from_ckpt(ckpt_path, device, use_ema=True, img_size_override=None):
     这是 baseline1 里「加了融合层就 unexpected keys」那类问题的根治办法。
     """
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    arch = ckpt.get("arch")
+    # baseline3 的 ckpt 写 arch；baseline1 的旧 ckpt 只写 backbone —— 兼容两者，
+    # 否则两套工具链的成员无法放进同一个集成（这是混编时必踩的坑）。
+    arch = ckpt.get("arch") or ckpt.get("backbone")
     if not arch:
-        raise ValueError(f"{ckpt_path} 里没有 arch 字段（是不是 baseline1 的旧权重？）")
+        raise ValueError(f"{ckpt_path} 里既没有 arch 也没有 backbone，无法重建结构")
     img_size = int(img_size_override or ckpt.get("img_size", 384))
     view_dim = int(ckpt.get("view_dim", 0))
     pool = ckpt.get("pool", "avg")
