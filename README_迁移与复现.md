@@ -1,80 +1,127 @@
 # 迁移与复现 · 入口文档
 
-> 最后更新：2026-11-06　｜　清理后总占用 **55G**，但**真正需要搬的只有 6.8G**
+> 最后更新：2026-11-08　｜　总占用 **57G**，其中 52G 是原始影像，**可丢弃的冗余约 1.85G**
 > 这份文档是迁移时的唯一入口：先读第 1、2 节搬东西，再按第 4 节校验，第 5 节跑训练。
+>
+> **一条命令搞定迁移**：`bash migrate.sh user@新设备:~/计挑赛`
+> （默认含全部原图 52G；加 `SKIP_RAW=1` 跳过 train+valid 的 48G，只搬约 6.9G，test 原图仍保留）
 
 ---
 
 ## 0. 一句话现状
 
-合规最高分 **77.67**（双架构集成，valid 0.8027），复赛线 77.7，差 0.03。
-三条有效手段已吃满（SSL +0.0258 / 跨架构集成 +0.0030 / 全量数据 +0.0047），
-其余 12 条路已用实验判负。**当前最大风险不是分数，是双模型在官方 T4 上能否跑进 100ms。**
+平台最高 **77.67**（full_base + effv2m 双架构集成，277MB，5090 上 39ms → T4 估 ≈100ms，**未实测**）。
+11-08 又搜出更好的候选：**in22k30 + swinb30**（valid 0.8112，334MB，估 T4 92ms，
+唯一一对 bootstrap 置信区间全为正的），以及 in22k30 + effv2s30（0.8102，208MB）。
+复赛线 77.7，一等奖线 78.5。
+
+**当前最大风险不是分数，是「体积 × 耗时」能否同时过关**：
+官方 T4 上双模型跑不跑得进 100ms，一次实测就能定生死（`cost.py`）。
+其余 12 条提分路已用实验判负，清单见第 8 节。
 
 ---
 
-## 1. 清理后还剩什么
+## 1. 要搬什么、不搬什么
 
-| 路径 | 体积 | 是什么 | 迁移? |
+### 1.1 必须搬（合计约 55G，其中 52G 是原图）
+
+| 路径 | 体积 | 是什么 | 不搬的后果 |
 |---|---|---|---|
-| `cxr_first/train/` | 46G | 30344 张训练原图 | **可选**（只有重做预处理/换分辨率源时才要） |
-| `cxr_first/test/` | 3.4G | 2218 张测试原图 | **必须**（`cost.py` 核验要用真原图） |
-| `cxr_first/valid/` | 2.1G | 1422 张验证原图 | **推荐**（重做 valid 预处理时用） |
-| `cxr_first/*.csv` | 1.9M | 三个标注 CSV | **必须** |
-| `baseline/data600/` | 2.5G | 33984 张 600² 预处理图 | **必须**（训练直接吃它） |
-| `baseline1/` | 268K | 产出 77.67 的主线代码（16 个 py + 3 份 README） | **必须** |
-| `baseline3/` | 156K | 新框架：换起点（IN-22k / DINOv2）+ 修掉 baseline1 的 8 个坑 | **必须**（继续训练用） |
-| `results/weights_7767/` | 551M | 77.67 的两个模型权重（fp32） | **必须**（保底提交物） |
-| `results/runs/` | 5.9M | 各实验的 metrics / npz 证据 | 推荐 |
-| `results/submission_7767_ens.csv` | 526K | 77.67 那份提交文件 | **必须** |
-| `dl/convnext_base_22k_1k_224.pth` | 338M | ImageNet-22k 起点权重（未验证的那条线） | **必须**（否则要重下 354MB） |
-| `tools/screen_solution.py` | 28K | 合规红线扫描脚本 | 推荐 |
-| `*.md` | ~100K | 见第 6 节文档地图 | **必须** |
-| `archive/` | 80K | 历史文档（两周计划、执行手册、老师简报） | 可选 |
+| `cxr_first/train/` | 46G | 30344 张训练原图 | 不能重做 1024²/384 等换分辨率预处理（训练本身不受影响） |
+| `cxr_first/valid/` | 2.1G | 1422 张验证原图 | 不能重做 valid 预处理 |
+| `cxr_first/test/` | 3.4G | 2218 张测试原图 | **`cost.py` 核验跑不了**（它要真原图计时） |
+| `cxr_first/*.csv` | 1.9M | 三个标注 CSV（比赛的"标签真值"） | 训练直接起不来 |
+| `baseline/data600/` | 2.5G | 33984 张 600² 预处理图 | 得花 15 分钟重跑 `preprocess.py` |
+| `baseline1/` | 588K | 产出 77.67 的主线代码（含规则、许可证、17 个 py） | 主线没了 |
+| `baseline3/` | 420K | 新框架：换起点（IN-22k / DINOv2）+ 修掉 baseline1 的 8 个坑 | 继续训练用不了 |
+| `results/weights_7767/` | 537M | 77.67 的两个模型权重（fp32） | **保底提交物没了**，得重训 |
+| `results/runs/` | 5.9M | 各实验的 metrics / npz 证据（附 A 申报要用） | 申报材料缺证据 |
+| `results/submission_*.csv` | 2.6M | 5 份历史提交（77.67 / 76.91 / 22k_swin 等） | 说不清提交历史 |
+| `dl/convnext_base_22k_1k_224.pth` | 338M | ImageNet-22k 起点权重 | 要重下 354MB（且要能连上） |
+| `baseline1/pictures_100` + `pictures_5` | 149M | `cost.py` 计时用的 105 张真原图 | 得按 5.3 重建（要 test 原图） |
+| `tools/screen_solution.py` | 28K | 合规红线扫描脚本 | 少一道自检 |
+| `*.md`（含 `规则.md`/`规则补充.md`/`赛题说明.md`） | ~120K | 比赛规则与全部决策记录 | **等于把判罚依据扔了** |
+| `archive/` | 80K | 历史文档（两周计划、执行手册、老师简报） | 只是追溯用得上，可选 |
+
+### 1.2 不用搬（合计约 1.85G，全都能重建）
+
+| 路径 | 体积 | 为什么不用搬 | 想恢复怎么办 |
+|---|---|---|---|
+| `results/cxr_t4.tgz` | 647M | T4 核验包的压缩副本 | `bash pack_t4.sh` |
+| `results/cxr_t4.zip` | 647M | 上面那份的第二份压缩，纯重复 | 同上，别做两份 |
+| `results/cxr_t4/weights/` | 552M | 与 `results/weights_7767/` **逐字节相同**（sha256 已核） | 直接拷过去 |
+| `results/cxr_t4/baseline1/` | 4.2M | `baseline1/` 的完整副本 | 就是 `baseline1/` 本身 |
+| `__pycache__/`（42 个 .pyc） | ~400K | 首次运行自动重建 | 无需 |
+| `.DS_Store` | 12K | macOS 目录元数据 | 无需 |
+| `.git/` | 788K | 新设备 `git clone` 即可（已从 322M 瘦到 788K） | 第 10 节 |
+
+> **注意**：`results/cxr_t4/` 里的 `pictures_100`/`pictures_5` 是**唯一存活副本**
+> （`baseline1/pictures_*` 已不存在），所以它们属于"必须搬"，别整个 t4 目录一起删。
 
 ---
 
-## 2. 迁移清单：三档，按你的带宽选
+## 2. 迁移：一条命令，或手动 rsync
 
-### 档位 A · 最小可用（6.8G）— 只继续训练 + 能出一份可核验的提交
+### 2.1 推荐：跑脚本（排除清单写死在脚本里，不靠记忆）
 
 ```bash
 cd /Users/mac/WorkBuddy/计挑赛
+
+# ① 先演练，只看会传什么，一个字节都不传
+DRY=1 bash migrate.sh user@新设备:~/计挑赛
+
+# ② 正式传（含 52G 原图）
+bash migrate.sh user@新设备:~/计挑赛
+
+# ③ 带宽紧就跳过 train+valid 共 48G 原图（只传约 6.9G，训练+核验照样能跑）
+SKIP_RAW=1 bash migrate.sh user@新设备:~/计挑赛
+
+# 目标端是移动硬盘/U 盘时，直接写路径
+bash migrate.sh /Volumes/移动硬盘/计挑赛
+```
+
+脚本按 **代码 → data600 → 权重 → 计时用图 → 原图** 五段传，
+先传完代码那几秒就能在新设备做语法/架构校验；中断了重跑即可续传（`--partial`）。
+传完会打印新设备上还需手动做的 3 条收尾命令（建软链、重建五折、校验）。
+
+### 2.2 手动 rsync（脚本跑不了时的备用）
+
+```bash
+cd /Users/mac/WorkBuddy/计挑赛
+
+# 代码 + 文档 + 标注 CSV + 小证据（几 MB）
+# 注意：只排除 cxr_first 的三个 split 子目录，别排掉整个 cxr_first/（那会连 train.csv 一起排掉，训练起不来）
 rsync -av --progress \
-  baseline baseline1 baseline3 results tools dl \
-  archive *.md pack_t4.sh \
-  user@新设备:~/计挑赛/
+  --exclude='.git/' --exclude='__pycache__/' --exclude='*.pyc' \
+  --exclude='cxr_first/train/' --exclude='cxr_first/valid/' --exclude='cxr_first/test/' \
+  --exclude='baseline/data600/' --exclude='dl/' \
+  --exclude='results/weights_7767/' --exclude='results/cxr_t4/' \
+  ./ user@新设备:~/计挑赛/
 
-# 只搬 test 原图 + CSV（train/valid 原图不搬）
-rsync -av --progress cxr_first/*.csv user@新设备:~/计挑赛/cxr_first/
-rsync -av --progress cxr_first/test user@新设备:~/计挑赛/cxr_first/
+# 预处理数据 + 权重（3.4G）
+rsync -av --progress baseline/data600/            user@新设备:~/计挑赛/baseline/data600/
+rsync -av --progress results/weights_7767/         user@新设备:~/计挑赛/results/weights_7767/
+rsync -av --progress dl/                           user@新设备:~/计挑赛/dl/
+
+# 计时用图（149M，注意源在 cxr_t4 里，目标是 baseline1 下）
+rsync -av --progress results/cxr_t4/pictures_100/ user@新设备:~/计挑赛/baseline1/pictures_100/
+rsync -av --progress results/cxr_t4/pictures_5/   user@新设备:~/计挑赛/baseline1/pictures_5/
+
+# 原始数据（52G，最慢，放最后；只要 test 就改成 cxr_first/test/）
+rsync -av --progress cxr_first/                    user@新设备:~/计挑赛/cxr_first/
 ```
 
-> 这个档位能：训练（data600 已含 train/valid/test 全部 33984 张）、推理、`cost.py` 核验、打包提交。
-> **不能**：重做 1024² 或其它分辨率的预处理（那需要 train 原图）。
+> 内网 100MB/s 传 52G 约 9 分钟；外网 1MB/s 约 13 小时。
 
-### 档位 B · 推荐（8.9G）— 加上 valid 原图，能重做任意 split 的预处理
-
-```bash
-rsync -av --progress cxr_first/valid user@新设备:~/计挑赛/cxr_first/
-```
-
-### 档位 C · 完整（55G）— 连 train 原图一起搬
+### 2.3 代码走 git（数据仍走 rsync）
 
 ```bash
-rsync -av --progress cxr_first/ user@新设备:~/计挑赛/cxr_first/
-```
+# 本机：先推到 GitHub（仓库已瘦身到 788K，见第 10 节）
+bash push.sh
 
-> 内网 100MB/s 约 9 分钟；外网 1MB/s 约 13 小时。**除非确定要换源分辨率，否则不要选 C。**
-
-### 代码也可以走 git（不含数据）
-
-```bash
-# 本机
-git -C /Users/mac/WorkBuddy/计挑赛 log --oneline   # 已有 2 次提交
 # 新设备
-git clone <你的远端> 计挑赛 && cd 计挑赛
-# 然后把 baseline/data600、results/weights_7767、dl/*.pth、cxr_first/test 单独 rsync 过来
+git clone https://github.com/KeseraYoru/JTS.git 计挑赛 && cd 计挑赛
+# 再用上面的 rsync 把 data600 / weights_7767 / dl / cxr_first / pictures 补过来
 ```
 
 ---
@@ -92,13 +139,20 @@ git clone <你的远端> 计挑赛 && cd 计挑赛
 │   └── data600/            ← 只有它，旧代码已删（见第 7 节）
 │       ├── train/ valid/ test/
 ├── baseline1/              ← 主线代码（77.67）
+│   ├── runs/folds/         ← 五折划分 CSV（已丢失，须重建，见第 4 节 ⑥）
+│   ├── pictures_100/       ← cost.py 计时用 100 张
+│   └── pictures_5/         ← 5 张预热
 ├── baseline3/              ← 新框架
-├── results/weights_7767/
-├── dl/
+├── results/
+│   ├── weights_7767/       ← full_base.pth + full_effv2m.pth
+│   ├── runs/               ← 各实验 metrics / npz
+│   └── submission_7767_ens.csv
+├── dl/                     ← convnext_base_22k_1k_224.pth
+├── migrate.sh  push.sh
 └── *.md
 ```
 
-对应关系（`baseline1/config.py`、`baseline3/config3.py` 第 26~31 行）：
+对应关系（`baseline1/config.py` 第 17~21 行、`baseline3/config3.py` 第 26~31 行）：
 
 | 常量 | 默认值 | 覆盖用的环境变量 |
 |---|---|---|
@@ -111,25 +165,38 @@ git clone <你的远端> 计挑赛 && cd 计挑赛
 
 ---
 
-## 4. 迁移后 5 条校验（2 分钟，缺一条都别开训）
+## 4. 迁移后 7 条校验（3 分钟，缺一条都别开训）
 
 ```bash
 cd ~/计挑赛
 
-# ① 图片数量：两个都必须是 33984
-find cxr_first -name "*.jpg" | wc -l
-find baseline/data600 -name "*.jpg" | wc -l
+# ① 图片数量：三个都必须对上
+find cxr_first -name "*.jpg" | wc -l          # 33984（搬了原图才查这条）
+find baseline/data600 -name "*.jpg" | wc -l   # 33984
+find baseline1/pictures_100 baseline1/pictures_5 -name "*.jpg" | wc -l   # 105
 
 # ② 代码语法（不需要 GPU）
 python -m py_compile baseline1/*.py baseline3/*.py baseline3/vendor/*.py && echo OK
 
 # ③ 架构可建 + 体积合规（不需要权重）
-cd baseline3 && python tools/selftest_archs.py --img-size 392
+cd baseline3 && python tools/selftest_archs.py --img-size 392 && cd ..
 
 # ④ 权重哈希（三个都必须对上）
 shasum -a 256 results/weights_7767/full_base.pth \
               results/weights_7767/full_effv2m.pth \
               dl/convnext_base_22k_1k_224.pth
+
+# ⑤ 重建五折划分（原 CSV 已丢失，种子 48 可复现同一份）
+cd baseline1 && python make_folds.py --k 5 --seed 48 --out runs/folds && cd ..
+ls baseline1/runs/folds/ | head   # 应有 fold_0_train.csv / fold_0_val.csv … fold_4_*
+
+# ⑥ 恢复 pack_t4.sh 的权重路径 + 提交文件（软链，不额外占空间）
+cd baseline1
+mkdir -p runs/full_base runs/full_effv2m
+ln -sf ../../../results/weights_7767/full_base.pth   runs/full_base/best.pth
+ln -sf ../../../results/weights_7767/full_effv2m.pth runs/full_effv2m/best.pth
+cp ../results/submission_7767_ens.csv submission_ens.csv
+cd ..
 ```
 
 期望：
@@ -141,7 +208,7 @@ fefc03f0…5805  full_base.pth            (334M, convnext_base, 77.67 成员 A)
 ```
 
 ```bash
-# ⑤ 冒烟：6 张图跑一次推理（要有原图，所以必须搬了 cxr_first/test）
+# ⑦ 冒烟：6 张图跑一次推理（要有原图，所以必须搬了 cxr_first/test）
 cd baseline1
 python predict.py --split test --limit 6 --ckpt ../results/weights_7767/full_base.pth \
   --out /tmp/smoke.npz
@@ -226,6 +293,9 @@ EOF
 | 文档 | 什么时候读 |
 |---|---|
 | **README_迁移与复现.md**（本文） | 迁移、部署、跑第一条命令 |
+| `migrate.sh` | **换设备就运行它**。五段式传输，排除清单写死，中断可续传 |
+| `push.sh` | 推代码到 GitHub 前运行它。会拦住任何 >50M 的对象 |
+| `.gitignore` | 想知道"什么该进 git"，看它一页就够 |
 | `规则.md` / `规则补充.md` / `赛题说明.md` | **动手前必读**。预训练权重、体积、耗时、提交口径的唯一依据（口头答复不作数） |
 | `项目状态与变更日志.md` | 想知道"现在到哪了、每个数字怎么来的、还有哪些坑" |
 | `规则约束与应对复盘_1106.md` | 想知道"规则封了什么、我们怎么绕、哪些路已判负"（14 条实验总账 + 6 条教训） |
@@ -276,3 +346,69 @@ ConvNeXt-V2（CC BY-NC，违规）。
 **实验前先写判据，实验后按判据读。** 官方 valid 只有 859 个检查、噪声 ±0.01，
 拿它做选型等于掷骰子——要用患者级 5 折（±0.0044）+ 配对 bootstrap 判差值。
 我们已经在"看着好一点就上"这件事上浪费过三天。
+
+---
+
+## 10. git 与 push（2026-11-08 修过一次大坑）
+
+### 10.1 曾经的问题
+
+`dl/convnext_base_22k_1k_224.pth`（338M）被提交进了版本库，导致 `.git` 膨胀到 **322M**。
+GitHub 单文件硬上限 100M，这个仓库**永远 push 不上去**，会报：
+
+```
+remote: error: File dl/convnext_base_22k_1k_224.pth is 338.00 MB; this exceeds GitHub's file size limit of 100.00 MB
+```
+
+已做的处理（当天完成，`.git` 从 322M → **788K**）：
+
+```bash
+git rm -r --cached dl baseline3/__pycache__ ...   # 1. 从索引移除
+# 2. 重写 .gitignore
+git commit -m "chore: 权重与缓存不入库"
+git filter-branch --index-filter 'git rm -r --cached --ignore-unmatch dl' \
+  --prune-empty --tag-name-filter cat -- --all      # 3. 从整条历史里剔除该 blob
+git reflog expire --expire=now --all && git gc --prune=now
+```
+
+> 改动前的 `.git` 完整备份在 `/tmp/git_backup_JTS_20261108_2205`（316M）。
+> 三条提交历史都保留了，只有那个 338M 的 blob 被拿掉。
+
+### 10.2 现在的规矩
+
+| 入库 | 不入库（走 rsync，见 `.gitignore`） |
+|---|---|
+| 全部 `.py` / `.sh` / `.md` | `cxr_first/` 原图（52G） |
+| `baseline1/licenses/`（附录 A 要许可证全文） | `baseline/data600/` |
+| `results/submission_7767_ens.csv`（保底提交物，唯一放行的 results 文件） | `*.pth` / `*.pt` / `*.npz` |
+| `.workbuddy/memory/`（决策记录） | `results/*` 其它、`runs/`、`pictures_*` |
+| | `*.zip` / `*.tgz`、`__pycache__/`、`.DS_Store` |
+
+### 10.3 推送
+
+```bash
+cd /Users/mac/WorkBuddy/计挑赛
+bash push.sh                 # 体检 → 提交 → 预检连通 → 推 origin master
+CHECK_ONLY=1 bash push.sh    # 只体检：待提交和整个历史里有没有 >50M 的对象
+```
+
+脚本会在推送前拦住任何超限对象——**这个坑踩过一次就够了**。
+
+**连不上 GitHub 时**（本机当前就是这个状态，`CONNECT tunnel failed 502`）：
+先开代理，再给 git 配上（Clash 默认 7890，V2Ray 常见 1080）：
+
+```bash
+git config --global http.proxy  http://127.0.0.1:7890
+git config --global https.proxy http://127.0.0.1:7890
+# 用完关掉
+git config --global --unset http.proxy && git config --global --unset https.proxy
+```
+
+或者改用 SSH（前提：公钥已传到 GitHub）：
+
+```bash
+git remote set-url origin git@github.com:KeseraYoru/JTS.git
+```
+
+> **历史重写过了**：如果哪台设备之前 clone 过旧版本，直接 `git pull` 会冲突，
+> 在新设备上重新 `git clone` 最省事。
