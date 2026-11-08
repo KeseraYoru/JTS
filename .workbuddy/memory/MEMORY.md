@@ -35,3 +35,12 @@
 - `baseline3/`：8 架构注册表（含 IN-22k、DINOv2），有 aug/mixup/layer-decay，新实验一律走这里。
 - 预处理产物 `data600` 复用；**EMA 必须每 step 更新**（放 epoch 层会让全部 ckpt 报废）。
 - ConvNeXt timm 权重 remap 有 off-by-one 坑（`stages.{i}` → `stages.{i-1}`），已修，须核对权重数 342/342。
+
+## 迁移与仓库（2026-11-08）
+- 远端 `github.com/KeseraYoru/JTS.git`（master），**已推送成功**；`.git` 从 322M 瘦到 856K。
+  曾误提交 `dl/*.pth`(338M)，已用 filter-branch 从全历史剔除；备份 `/tmp/git_backup_JTS_20261108_2205`。
+- 换设备：`bash migrate.sh user@host:~/计挑赛`；`SKIP_RAW=1` 跳过 train+valid 48G，只传 6.9G（**test 原图必须传，cost.py 要它**）。
+- 入库规则：代码/文档/licenses/submission_7767_ens.csv 进 git；数据、权重、npz、压缩包、缓存全走 rsync。
+- **`pictures_100`/`pictures_5` 唯一存活副本在 `results/cxr_t4/`**（`baseline1/` 下已无），故 `pack_t4.sh` 现跑不通。
+- **五折划分 CSV 已丢失**，用 `make_folds.py --k 5 --seed 48` 重建（10 个文件，可复现）。
+- 本机 `python3` 无 numpy；需要跑训练侧脚本时用 `~/.workbuddy/binaries/python/envs/default/bin/python`。
