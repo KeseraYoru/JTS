@@ -66,6 +66,32 @@ echo "源目录：$SRC_LOCAL"
 echo "目标  ：$DEST"
 du -sh . 2>/dev/null | awk '{print "本机总占用："$1}'
 
+# ---------- 预检：目标是远程时，先确认 ssh 通不通 ----------
+# 跨公网迁移最常见的失败就是 ssh 不通，等到 rsync 跑到一半才报错会白等
+if [[ "$DEST" == *@* ]]; then
+  SSH_HOST="${DEST%%:*}"
+  echo
+  echo ">>> 预检 SSH：$SSH_HOST"
+  if ssh -o ConnectTimeout=8 -o BatchMode=yes "$SSH_HOST" true 2>/dev/null; then
+    echo "    ✓ 已免密直连"
+  else
+    echo "    !! 探测失败。常见三种原因："
+    echo "       ① 不在同一内网 → 用 Tailscale 组虚拟内网，见 README 2.4"
+    echo "          （两台设备装 Tailscale、登录同账号，然后用 ssh 用户名@100.x.x.x 试）"
+    echo "       ② 没配免密 → ssh-copy-id $SSH_HOST   否则每个阶段都要手输密码"
+    echo "       ③ 主机名/IP 或端口不对 → 先单独跑：ssh $SSH_HOST"
+    echo
+    echo "    确认网络没问题、只是用密码登录的话，加 FORCE=1 跳过本预检："
+    echo "       FORCE=1 bash migrate.sh $DEST"
+    if [[ "${FORCE:-0}" != "1" ]]; then
+      echo
+      echo "    已中止（未传任何文件）。"
+      exit 1
+    fi
+    echo "    FORCE=1，继续。"
+  fi
+fi
+
 # ---------- 阶段 1：代码 + 文档 + 小体积证据（几 MB）----------
 # 注意：只排除 cxr_first 下的三个 split 子目录，**保留 3 个标注 CSV**
 # （训练读标签全靠它们；排掉整个 cxr_first/ 会让 SKIP_RAW 模式直接起不来）
