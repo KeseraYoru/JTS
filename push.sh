@@ -111,8 +111,12 @@ echo "============================================================"
 if git push -u "$REMOTE" "$BRANCH"; then
   echo
   echo "  ✓ 推送成功：$(git remote get-url "$REMOTE") ($BRANCH)"
-  echo "  历史已重写，若远端此前有旧提交，本次可能已用 --force 语义覆盖；"
-  echo "  队友若已 clone 过，需要重新 clone（旧历史与现在不兼容）。"
+  echo "    本地 HEAD  $(git rev-parse --short HEAD)"
+  echo "    远端 $BRANCH  $(git ls-remote "$REMOTE" "refs/heads/$BRANCH" 2>/dev/null | cut -c1-7)"
+  echo
+  echo "  注意：本仓库历史在 2026-11-08 重写过（剔除 338M 权重）。"
+  echo "    若已 clone 过旧版本的设备，pull 会冲突 → 重新 clone 最省事；"
+  echo "    若远端已有旧提交而被拒，才需要 git push -u --force $REMOTE $BRANCH。"
 else
   echo "  ✗ 推送失败，常见两种："
   echo "    rejected（non-fast-forward）→ 历史重写过，需要 git push -u --force origin $BRANCH"
