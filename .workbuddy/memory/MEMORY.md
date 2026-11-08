@@ -44,3 +44,8 @@
 - **`pictures_100`/`pictures_5` 唯一存活副本在 `results/cxr_t4/`**（`baseline1/` 下已无），故 `pack_t4.sh` 现跑不通。
 - **五折划分 CSV 已丢失**，用 `make_folds.py --k 5 --seed 48` 重建（10 个文件，可复现）。
 - 本机 `python3` 无 numpy；需要跑训练侧脚本时用 `~/.workbuddy/binaries/python/envs/default/bin/python`。
+
+## shell 写法铁律（2026-11-08 踩过两次）
+- **变量后只要紧跟非 ASCII 字符（中文标点/括号），必须写 `${VAR}`**。
+  `"$name：xxx"` 会崩（有 set -u）或吞掉变量值输出乱码（无 set -u）。
+- 已修 47 处（8 个队列脚本）+ push.sh 两处。
