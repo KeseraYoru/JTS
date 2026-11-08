@@ -116,7 +116,7 @@ if git push -u "$REMOTE" "$BRANCH"; then
   echo
   echo "  注意：本仓库历史在 2026-11-08 重写过（剔除 338M 权重）。"
   echo "    若已 clone 过旧版本的设备，pull 会冲突 → 重新 clone 最省事；"
-  echo "    若远端已有旧提交而被拒，才需要 git push -u --force $REMOTE $BRANCH。"
+  echo "    若远端已有旧提交而被拒，才需要 git push -u --force ${REMOTE} ${BRANCH}。"
 else
   echo "  ✗ 推送失败，常见两种："
   echo "    rejected（non-fast-forward）→ 历史重写过，需要 git push -u --force origin $BRANCH"
