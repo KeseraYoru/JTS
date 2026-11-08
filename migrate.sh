@@ -30,6 +30,7 @@ DEST="${DEST%/}/"
 # ---------- 传输开关 ----------
 RSYNC_OPTS=(-a --partial --human-readable --progress)
 [[ "${DRY:-0}" == "1" ]] && RSYNC_OPTS+=(--dry-run) && echo ">>> DRY-RUN 模式：只显示会传什么，不真传"
+EXTRA=""     # 单次调用的额外开关（空格分隔；选项本身不含空格）
 
 # ---------- 排除清单：这些在新设备上不需要 ----------
 EXCLUDES=(
@@ -52,10 +53,13 @@ run_rsync() {
   echo "============================================================"
   echo ">>> $label"
   echo "============================================================"
-  rsync "${RSYNC_OPTS[@]}" "${EXCLUDES[@]}" "$@" || {
+  # $EXTRA 故意不加引号：要按空格拆成多个选项；为空时展开成空，bash 3.2 + set -u 下安全
+  rsync "${RSYNC_OPTS[@]}" $EXTRA "${EXCLUDES[@]}" "$@" || {
     echo "!! 上一步 rsync 返回非 0（常见原因：ssh 抖动/磁盘满），可修好后重跑本脚本续传"
+    EXTRA=""
     return 1
   }
+  EXTRA=""
 }
 
 echo "源目录：$SRC_LOCAL"
@@ -97,9 +101,14 @@ if [[ "${SKIP_RAW:-0}" == "1" ]]; then
   echo
   echo ">>> 阶段 5/5  跳过 train(46G)/valid(2.1G)，只传 test 原图"
   echo "    影响：不能重做 1024²/384 等换源分辨率预处理；训练/推理/核验完全不受影响。"
+  EXTRA="--whole-file"      # 33984 张小 jpg，跳过增量滚动校验，快很多
   run_rsync "阶段 5/5  原始数据 cxr_first/test（cost.py 核验必需）" \
     cxr_first/test/ "${DEST}cxr_first/test/"
 else
+  echo
+  echo ">>> 阶段 5/5  原图共 33984 张，单张只有 1~2MB："
+  echo "    用 --whole-file 整文件传（rsync 默认为每个文件算增量，对这种小图纯浪费）。"
+  EXTRA="--whole-file"
   run_rsync "阶段 5/5  原始数据 cxr_first（train 46G + valid 2.1G + test 3.4G + 3 个 CSV）" \
     cxr_first/ "${DEST}cxr_first/"
 fi
